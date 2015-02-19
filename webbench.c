@@ -16,11 +16,13 @@
  * 
  */ 
 #include "socket.c"
+/*FIXIT: including a C file is a bad practice*/
 #include <unistd.h>
 #include <sys/param.h>
 #include <rpc/types.h>
 #include <getopt.h>
 #include <strings.h>
+/*FIXIT: strings.h is marked as legacy*/
 #include <time.h>
 #include <signal.h>
 
@@ -31,11 +33,13 @@ int failed=0;
 int bytes=0;
 /* globals */
 int http10=1; /* 0 - http/0.9, 1 - http/1.0, 2 - http/1.1 */
+/*FIXIT: use a var name like http_version instead*/
 /* Allow: GET, HEAD, OPTIONS, TRACE */
 #define METHOD_GET 0
 #define METHOD_HEAD 1
 #define METHOD_OPTIONS 2
 #define METHOD_TRACE 3
+/*FIXTIT: use enum type instead*/
 #define PROGRAM_VERSION "1.5"
 int method=METHOD_GET;
 int clients=1;
@@ -47,6 +51,8 @@ int benchtime=30;
 /* internal */
 int mypipe[2];
 char host[MAXHOSTNAMELEN];
+/*MAXHOSTNAMELEN is for gethostname sethostname*/
+/*FIXIT some day?*/
 #define REQUEST_SIZE 2048
 char request[REQUEST_SIZE];
 
@@ -74,9 +80,12 @@ static void benchcore(const char* host,const int port, const char *request);
 static int bench(void);
 static void build_request(const char *url);
 
-static void alarm_handler(int signal)
+static void alarm_handler(int signum)
 {
-   timerexpired=1;
+	if(signum == SIGALRM)
+   		timerexpired=1;
+	else
+		perror("receive: ");
 }	
 
 static void usage(void)
@@ -104,13 +113,13 @@ int main(int argc, char *argv[])
  int opt=0;
  int options_index=0;
  char *tmp=NULL;
-
+/*
  if(argc==1)
  {
 	  usage();
           return 2;
  } 
-
+*/
  while((opt=getopt_long(argc,argv,"912Vfrt:p:c:?h",long_options,&options_index))!=EOF )
  {
   switch(opt)
@@ -145,8 +154,9 @@ int main(int argc, char *argv[])
 	     proxyport=atoi(tmp+1);break;
    case ':':
    case 'h':
-   case '?': usage();return 2;break;
+   case '?': usage();return 2;
    case 'c': clients=atoi(optarg);break;
+   //default:  usage(); return 2;
   }
  }
  
@@ -201,9 +211,13 @@ void build_request(const char *url)
   char tmp[10];
   int i;
 
+	memset(host, 0, sizeof(host));
+	memset(request, 0, sizeof(request));
+
+	/*
   bzero(host,MAXHOSTNAMELEN);
   bzero(request,REQUEST_SIZE);
-
+	*/
   if(force_reload && proxyhost!=NULL && http10<1) http10=1;
   if(method==METHOD_HEAD && http10<1) http10=1;
   if(method==METHOD_OPTIONS && http10<2) http10=2;
@@ -373,9 +387,11 @@ static int bench(void)
 	  while(1)
 	  {
 		  pid=fscanf(f,"%d %d %d",&i,&j,&k);
+		  /*FIXIT: not a pid_t, use other var name*/
 		  if(pid<2)
                   {
                        fprintf(stderr,"Some of our childrens died.\n");
+					   /*FIXIT:*childrens generate bad output*/
                        break;
                   }
 		  speed+=i;
@@ -406,7 +422,7 @@ void benchcore(const char *host,const int port,const char *req)
  sa.sa_handler=alarm_handler;
  sa.sa_flags=0;
  if(sigaction(SIGALRM,&sa,NULL))
-    exit(3);
+    perror("sigaction"),exit(3);
  alarm(benchtime);
 
  rlen=strlen(req);
