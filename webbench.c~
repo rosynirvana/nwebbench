@@ -19,7 +19,6 @@
 /*FIXIT: including a C file is a bad practice*/
 #include <unistd.h>
 #include <sys/param.h>
-#include <sys/wait.h>
 #include <rpc/types.h>
 #include <getopt.h>
 #include <strings.h>
@@ -34,7 +33,11 @@ int speed = 0;
 int failed = 0;
 int bytes = 0;
 /* globals */
-enum { HTTP09, HTTP10, HTTP11 } http_version = HTTP10;
+enum{HTTP09, HTTP10, HTTP11} http_version = HTTP10;
+int http10 = 1;			/* 0 - http/0.9, 1 - http/1.0, 2 - http/1.1 */
+/*FIXIT: use a var name like http_version instead*/
+/* Allow: GET, HEAD, OPTIONS, TRACE */
+//enum{GET, HEAD, OPTIONS, TRACE} method = GET;
 int method = 0;
 #define PROGRAM_VERSION "1.5"
 int clients = 1;
@@ -70,6 +73,7 @@ static const struct option long_options[] = {
 };
 
 /* prototypes */
+static int set_proxy(const char* str);
 static void benchcore(const char *host, const int port,
 		      const char *request);
 static int bench(void);
@@ -78,7 +82,9 @@ static void build_request(const char *url);
 static void alarm_handler(int signum)
 {
     if (signum == SIGALRM)
-		timer_expired = 1;
+	timer_expired = 1;
+    else
+	perror("receive: ");
 }
 
 static void usage(void)
@@ -106,8 +112,8 @@ int main(int argc, char *argv[])
     int opt = 0;
     int options_index = 0;
     char *tmp = NULL;
-
-    while ((opt =
+    
+	while ((opt =
 	    getopt_long(argc, argv, "912Vfrt:p:c:?h", long_options,
 			&options_index)) != -1) {
 	switch (opt) {
@@ -195,8 +201,8 @@ int main(int argc, char *argv[])
     case 3:
 	printf("TRACE");
 	break;
-    case 0:
-    default:
+	case 0:
+	default:
 	printf("GET");
     }
     printf(" %s", argv[optind]);
@@ -207,8 +213,8 @@ int main(int argc, char *argv[])
     case HTTP11:
 	printf(" (using HTTP/1.1)");
 	break;
-    default:
-	;
+	default:
+		;
     }
     printf("\n");
     if (clients == 1)
@@ -234,10 +240,10 @@ void build_request(const char *url)
 
     memset(host, 0, sizeof(host));
     memset(request, 0, sizeof(request));
-
-    if (method == 2 || method == 3)
-	if (http_version < HTTP11)
-	    http_version = HTTP11;
+	
+	if(method == 2 || method == 3)
+		if(http_version < HTTP11)
+			http_version = HTTP11;
     if (force_reload && proxyhost != NULL && http_version < 1)
 	http_version = 1;
     if (method == 1 && http_version < 1)
@@ -310,8 +316,8 @@ void build_request(const char *url)
     else if (http_version == 2)
 	strcat(request, " HTTP/1.1");
     strcat(request, "\r\n");
-    strcat(request, "User-Agent: WebBench " PROGRAM_VERSION "\r\n");
-    if (proxyhost == NULL) {
+	strcat(request, "User-Agent: WebBench " PROGRAM_VERSION "\r\n");
+    if (proxyhost == NULL && http_version > 0) {
 	strcat(request, "Host: ");
 	strcat(request, host);
 	strcat(request, "\r\n");
@@ -321,7 +327,7 @@ void build_request(const char *url)
     }
     if (http_version > 1)
 	strcat(request, "Connection: close\r\n");
-    strcat(request, "\r\n");
+	strcat(request, "\r\n");
     // printf("Req=%s\n",request);
 }
 
@@ -329,8 +335,6 @@ void build_request(const char *url)
 static int bench(void)
 {
     int i, j, k;
-	int returned_children = 0;
-	int discard;
     pid_t pid = 0;
     FILE *f;
 
@@ -348,10 +352,18 @@ static int bench(void)
 	return 3;
     }
 
+    /* not needed, since we have alarm() in childrens */
+    /* wait 4 next system clock tick */
+    /*
+       cas=time(NULL);
+       while(time(NULL)==cas)
+       sched_yield();
+     */
+
     /* fork childs */
     for (i = 0; i < clients; i++) {
 	pid = fork();
-	if (pid == (pid_t) 0) {
+	if (pid <= (pid_t) 0) {
 	    /* child process or error */
 	    sleep(1);		/* make childs faster */
 	    break;
@@ -365,10 +377,11 @@ static int bench(void)
     }
 
     if (pid == (pid_t) 0) {
-	benchcore(proxyhost==NULL ? host:proxyhost, 
-		proxyhost==NULL ? 80:proxyport,
-		request);
-
+	/* I am a child */
+	if (proxyhost == NULL)
+	    benchcore(host, proxyport, request);
+	else
+	    benchcore(proxyhost, proxyport, request);
 
 	/* write results to pipe */
 	f = fdopen(mypipe[1], "w");
@@ -376,33 +389,40 @@ static int bench(void)
 	    perror("open pipe for writing failed.");
 	    return 3;
 	}
-	fprintf(f, " %d %d %d\n", speed, failed, bytes);
+	/* fprintf(stderr,"Child - %d %d\n",speed,failed); */
+	fprintf(f, "%d %d %d\n", speed, failed, bytes);
 	fclose(f);
 	return 0;
     } else {
-	for(;returned_children != clients; ++returned_children)
-		wait(&discard);
-
 	f = fdopen(mypipe[0], "r");
 	if (f == NULL) {
 	    perror("open pipe for reading failed.");
 	    return 3;
 	}
-	for (speed=0, failed=0, bytes=0; clients > 0; --clients) {
-		int read_data = 0;
-	    read_data = fscanf(f, " %d %d %d", &i, &j, &k);
-	    if (read_data < 3) {
-		fprintf(stderr, "Some of childrens generate bad output.\n");
+	setvbuf(f, NULL, _IONBF, 0);
+	speed = 0;
+	failed = 0;
+	bytes = 0;
+
+	while (1) {
+	    pid = fscanf(f, "%d %d %d", &i, &j, &k);
+	    /*FIXIT: not a pid_t, use other var name */
+	    if (pid < 2) {
+		fprintf(stderr, "Some of our childrens died.\n");
+		/*FIXIT:*childrens generate bad output */
 		break;
 	    }
 	    speed += i;
 	    failed += j;
 	    bytes += k;
+	    /* fprintf(stderr,"*Knock* %d %d read=%d\n",speed,failed,pid); */
+	    if (--clients == 0)
+		break;
 	}
 	fclose(f);
 
 	printf
-	    ("\nSpeed=%d pages/min, %d bytes/sec.\nRequests: %d succeed, %d failed.\n",
+	    ("\nSpeed=%d pages/min, %d bytes/sec.\nRequests: %d susceed, %d failed.\n",
 	     (int) ((speed + failed) / (benchtime / 60.0f)),
 	     (int) (bytes / (float) benchtime), speed, failed);
     }
@@ -414,48 +434,49 @@ void benchcore(const char *host, const int port, const char *req)
     int rlen;
     char buf[1500];
     int s, i;
+    struct sigaction sa;
 
-	if(signal(SIGALRM, alarm_handler) == SIG_ERR){
-		perror("signal");
-		return;
-	}
+    /* setup alarm signal handler */
+    sa.sa_handler = alarm_handler;
+    sa.sa_flags = 0;
+    if (sigaction(SIGALRM, &sa, NULL))
+	perror("sigaction"), exit(3);
     alarm(benchtime);
 
     rlen = strlen(req);
-  nexttry:while (timer_expired == 0) {
+  nexttry:while (1) {
 	if (timer_expired) {
-		failed = failed > 0 ? failed-1 : 0;
-		/*functions interrupted by signal may increase failed count*/
+	    if (failed > 0) {
+		/* fprintf(stderr,"Correcting failed by signal\n"); */
+		failed--;
+	    }
 	    return;
 	}
 	s = Socket(host, port);
 	if (s < 0) {
 	    failed++;
-		perror("creating sockets or connecting ");
 	    continue;
 	}
 	if (rlen != write(s, req, rlen)) {
 	    failed++;
-		perror("sending HTTP requests ");
 	    close(s);
 	    continue;
 	}
-	/* make no sense for me */
-	/*
-	if (http_version == 0)
+	if (http10 == 0)
 	    if (shutdown(s, 1)) {
 		failed++;
 		close(s);
 		continue;
 	    }
-	*/
 	if (force == 0) {
 	    /* read all available data from socket */
-	    while (timer_expired == 0) {
+	    while (1) {
+		if (timer_expired)
+		    break;
 		i = read(s, buf, 1500);
+		/* fprintf(stderr,"%d\n",i); */
 		if (i < 0) {
 		    failed++;
-			perror("sending data ");
 		    close(s);
 		    goto nexttry;
 		} else if (i == 0)
@@ -466,7 +487,6 @@ void benchcore(const char *host, const int port, const char *req)
 	}
 	if (close(s)) {
 	    failed++;
-		perror("closing a socket ");
 	    continue;
 	}
 	speed++;
